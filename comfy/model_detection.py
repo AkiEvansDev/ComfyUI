@@ -145,6 +145,34 @@ def detect_unet_config(state_dict, key_prefix):
         dit_config["guidance_embed"] = "{}guidance_in.in_layer.weight".format(key_prefix) in state_dict_keys
         return dit_config
 
+    if '{}t5_yproj.weight'.format(key_prefix) in state_dict_keys: #Genmo mochi preview
+        dit_config = {}
+        dit_config["image_model"] = "mochi_preview"
+        dit_config["depth"] = 48
+        dit_config["patch_size"] = 2
+        dit_config["num_heads"] = 24
+        dit_config["hidden_size_x"] = 3072
+        dit_config["hidden_size_y"] = 1536
+        dit_config["mlp_ratio_x"] = 4.0
+        dit_config["mlp_ratio_y"] = 4.0
+        dit_config["learn_sigma"] = False
+        dit_config["in_channels"] = 12
+        dit_config["qk_norm"] = True
+        dit_config["qkv_bias"] = False
+        dit_config["out_bias"] = True
+        dit_config["attn_drop"] = 0.0
+        dit_config["patch_embed_bias"] = True
+        dit_config["posenc_preserve_area"] = True
+        dit_config["timestep_mlp_bias"] = True
+        dit_config["attend_to_padding"] = False
+        dit_config["timestep_scale"] = 1000.0
+        dit_config["use_t5"] = True
+        dit_config["t5_feat_dim"] = 4096
+        dit_config["t5_token_length"] = 256
+        dit_config["rope_theta"] = 10000.0
+        return dit_config
+
+
     if '{}input_blocks.0.0.weight'.format(key_prefix) not in state_dict_keys:
         return None
 
@@ -288,8 +316,11 @@ def model_config_from_unet(state_dict, unet_key_prefix, use_base_if_no_match=Fal
     if model_config is None and use_base_if_no_match:
         model_config = comfy.supported_models_base.BASE(unet_config)
 
-    if "{}scaled_fp8".format(unet_key_prefix) in state_dict:
-        model_config.scaled_fp8 = True
+    scaled_fp8_weight = state_dict.get("{}scaled_fp8".format(unet_key_prefix), None)
+    if scaled_fp8_weight is not None:
+        model_config.scaled_fp8 = scaled_fp8_weight.dtype
+        if model_config.scaled_fp8 == torch.float32:
+            model_config.scaled_fp8 = torch.float8_e4m3fn
 
     return model_config
 
