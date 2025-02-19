@@ -1,0 +1,1 @@
+python main.py --windows-standalone-build --cuda-device 1 --port 8189

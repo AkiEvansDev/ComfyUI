@@ -1,0 +1,1 @@
+python main.py --windows-standalone-build --port 8188
