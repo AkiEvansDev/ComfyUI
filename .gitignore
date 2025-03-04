@@ -55,3 +55,4 @@ web_custom_versions/
 /models/configs/v2-inference.yaml
 /models/configs/v2-inference_fp32.yaml
 /models/configs/v2-inpainting-inference.yaml
+/models/text_encoders/put_text_encoder_files_here
