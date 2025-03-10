@@ -108,7 +108,7 @@ class BaseModel(torch.nn.Module):
 
         if not unet_config.get("disable_unet_model_creation", False):
             if model_config.custom_operations is None:
-                fp8 = model_config.optimizations.get("fp8", model_config.scaled_fp8 is not None)
+                fp8 = model_config.optimizations.get("fp8", False)
                 operations = comfy.ops.pick_operations(unet_config.get("dtype", None), self.manual_cast_dtype, fp8_optimizations=fp8, scaled_fp8=model_config.scaled_fp8)
             else:
                 operations = model_config.custom_operations
@@ -161,8 +161,12 @@ class BaseModel(torch.nn.Module):
                     extra = extra.to(dtype)
             extra_conds[o] = extra
 
+        t = self.process_timestep(t, x=x, **extra_conds)
         model_output = self.diffusion_model(xc, t, context=context, control=control, transformer_options=transformer_options, **extra_conds).float()
         return self.model_sampling.calculate_denoised(sigma, model_output, x)
+
+    def process_timestep(self, timestep, **kwargs):
+        return timestep
 
     def get_dtype(self):
         return self.diffusion_model.dtype
@@ -855,16 +859,25 @@ class LTXV(BaseModel):
         if cross_attn is not None:
             out['c_crossattn'] = comfy.conds.CONDRegular(cross_attn)
 
-        guiding_latent = kwargs.get("guiding_latent", None)
-        if guiding_latent is not None:
-            out['guiding_latent'] = comfy.conds.CONDRegular(guiding_latent)
-
-        guiding_latent_noise_scale = kwargs.get("guiding_latent_noise_scale", None)
-        if guiding_latent_noise_scale is not None:
-            out["guiding_latent_noise_scale"] = comfy.conds.CONDConstant(guiding_latent_noise_scale)
-
         out['frame_rate'] = comfy.conds.CONDConstant(kwargs.get("frame_rate", 25))
+
+        denoise_mask = kwargs.get("concat_mask", kwargs.get("denoise_mask", None))
+        if denoise_mask is not None:
+            out["denoise_mask"] = comfy.conds.CONDRegular(denoise_mask)
+
+        keyframe_idxs = kwargs.get("keyframe_idxs", None)
+        if keyframe_idxs is not None:
+            out['keyframe_idxs'] = comfy.conds.CONDRegular(keyframe_idxs)
+
         return out
+
+    def process_timestep(self, timestep, x, denoise_mask=None, **kwargs):
+        if denoise_mask is None:
+            return timestep
+        return self.diffusion_model.patchifier.patchify(((denoise_mask) * timestep.view([timestep.shape[0]] + [1] * (denoise_mask.ndim - 1)))[:, :1])[0]
+
+    def scale_latent_inpaint(self, sigma, noise, latent_image, **kwargs):
+        return latent_image
 
 class HunyuanVideo(BaseModel):
     def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
@@ -885,13 +898,31 @@ class HunyuanVideo(BaseModel):
         guidance = kwargs.get("guidance", 6.0)
         if guidance is not None:
             out['guidance'] = comfy.conds.CONDRegular(torch.FloatTensor([guidance]))
+
+        guiding_frame_index = kwargs.get("guiding_frame_index", None)
+        if guiding_frame_index is not None:
+            out['guiding_frame_index'] = comfy.conds.CONDRegular(torch.FloatTensor([guiding_frame_index]))
+
         return out
+
+    def scale_latent_inpaint(self, latent_image, **kwargs):
+        return latent_image
+
+class HunyuanVideoI2V(HunyuanVideo):
+    def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
+        super().__init__(model_config, model_type, device=device)
+        self.concat_keys = ("concat_image", "mask_inverted")
+
+    def scale_latent_inpaint(self, latent_image, **kwargs):
+        return super().scale_latent_inpaint(latent_image=latent_image, **kwargs)
 
 class HunyuanVideoSkyreelsI2V(HunyuanVideo):
     def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
         super().__init__(model_config, model_type, device=device)
         self.concat_keys = ("concat_image",)
 
+    def scale_latent_inpaint(self, latent_image, **kwargs):
+        return super().scale_latent_inpaint(latent_image=latent_image, **kwargs)
 
 class CosmosVideo(BaseModel):
     def __init__(self, model_config, model_type=ModelType.EDM, image_to_video=False, device=None):
